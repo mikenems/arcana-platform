@@ -31,4 +31,4 @@ This repo is monitored by [Helperee](https://helperee.io). When a schema file ch
 - Re-generates AI column descriptions for any new columns
 - Notifies registered consumers
 
-Owner: Alex Chen, Platform Engineering (`not a real person`)
+Owner: Alex Chen, Platform Engineering (`not a real person so no need to try and find them`)
