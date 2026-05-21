@@ -1,0 +1,67 @@
+name: arcana_platform - Catalog Monitor
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+jobs:
+  catalog-monitor:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      statuses: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Detect changes and notify catalog
+        if: env.CATALOG_WEBHOOK_URL != ''
+        env:
+          CATALOG_WEBHOOK_URL: ${{ secrets.CATALOG_WEBHOOK_URL }}
+          CATALOG_WEBHOOK_SECRET: ${{ secrets.CATALOG_WEBHOOK_SECRET }}
+        run: |
+          # Get list of changed files for this push/PR
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            CHANGED_FILES=$(git diff --name-only ${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }})
+          else
+            CHANGED_FILES=$(git diff --name-only HEAD~1 HEAD)
+          fi
+
+          echo "Changed files:"
+          echo "$CHANGED_FILES"
+
+          # Encode changed files as a JSON array
+          FILES_JSON=$(echo "$CHANGED_FILES" | jq -R -s 'split("\n") | map(select(length > 0))')
+
+          # Include helperee.yaml content if the file exists in the repo
+          HELPEREE_YAML=""
+          if [ -f "helperee.yaml" ]; then
+            HELPEREE_YAML=$(cat helperee.yaml)
+          fi
+
+          # Build payload — pattern matching and classification happens in the catalog
+          PAYLOAD=$(jq -nc \
+            --arg repo "$GITHUB_REPOSITORY" \
+            --arg ref "$GITHUB_REF" \
+            --arg sha "$GITHUB_SHA" \
+            --arg message "${{ github.event.head_commit.message || github.event.pull_request.title }}" \
+            --arg url "${{ github.event.head_commit.url || github.event.pull_request.html_url }}" \
+            --arg author "${{ github.event.head_commit.author.name || github.actor }}" \
+            --arg email "${{ github.event.head_commit.author.email || '' }}" \
+            --argjson files "$FILES_JSON" \
+            --arg helpereeYaml "$HELPEREE_YAML" \
+            '{repo: $repo, ref: $ref, commitSha: $sha, commitMessage: $message, commitUrl: $url, authorName: $author, authorEmail: $email, changedFiles: $files, helpereeYamlContent: (if $helpereeYaml != "" then $helpereeYaml else null end)}')
+
+          SIGNATURE=$(printf '%s' "$PAYLOAD" | openssl dgst -sha256 -hmac "$CATALOG_WEBHOOK_SECRET" | sed 's/.* //')
+
+          curl -f -s -X POST \
+            -H "Content-Type: application/json" \
+            -H "X-Catalog-Signature: sha256=$SIGNATURE" \
+            --data "$PAYLOAD" \
+            "$CATALOG_WEBHOOK_URL" || echo "Warning: Catalog notification failed (non-blocking)"
