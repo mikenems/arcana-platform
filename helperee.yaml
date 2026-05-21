@@ -1,0 +1,16 @@
+# helperee.yaml — data asset metadata for arcana_platform
+# Commit this file to your repo root. Helperee reads it automatically on every push.
+#
+# Fields marked with * are read by the catalog automatically when this file changes.
+# Everything else is optional but helps downstream consumers.
+
+asset: arcana_platform
+display_name: # * Human-friendly name, e.g. "User Permissions & Feature Flags"
+owner: # * Owning team or person, e.g. "Platform Engineering"
+owner_email: # * Contact email, e.g. platform@company.com
+intended_consumers: # * Comma-separated, e.g. "Analytics, Finance, Product"
+tier: # * raw | staging | curated
+domain: # * Data domain, e.g. "engineering-infrastructure"
+notes: |
+  # Free-text notes about this asset.
+  # Where does the data come from? How often is it updated? Any known quirks?
