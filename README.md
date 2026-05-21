@@ -6,10 +6,10 @@ These tables are sourced from the Postgres production replica and synced nightly
 
 ## Tables
 
-| Table | Description |
-|-------|-------------|
-| `user_permissions` | User roles and access grants per org |
-| `audit_log` | Compliance trail for all platform events |
+| Table              | Description                              |
+| ------------------ | ---------------------------------------- |
+| `user_permissions` | User roles and access grants per org     |
+| `audit_log`        | Compliance trail for all platform events |
 
 ## Structure
 
@@ -25,9 +25,10 @@ helperee.yaml            — Helperee catalog config for user_permissions
 ## Catalog Integration
 
 This repo is monitored by [Helperee](https://helperee.io). When a schema file changes, Helperee automatically:
+
 - Detects the change and logs it on the asset's Changes tab
 - Flags the asset as quality-stale for downstream consumers
 - Re-generates AI column descriptions for any new columns
 - Notifies registered consumers
 
-Owner: Alex Chen, Platform Engineering (`alex@arcana.io`)
+Owner: Alex Chen, Platform Engineering (`not a real person`)
