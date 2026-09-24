@@ -1,0 +1,30 @@
+# helperee.yaml — data asset metadata for arcana_platform
+# Commit this file to your repo root. Helperee reads it automatically on every push.
+
+asset: arcana_platform
+display_name: "Arcana Platform"
+owner: "Alex Chen"
+owner_email: "platform@arcana.io"
+intended_consumers: "Analytics, Security, Product"
+tier: raw
+domain: platform-infrastructure
+notes: |
+  Source tables for the Arcana platform, synced nightly from the production
+  Postgres replica into BigQuery (arcana_platform dataset) by 03:00 UTC.
+
+  Tables covered by this repo:
+    - user_permissions  — user role grants, MFA state, and ML risk scores
+    - audit_log         — immutable compliance event trail
+    - subscriptions     — org plan and billing state
+    - feature_flags     — per-org feature flag state
+
+  SQL transform models live in models/ and produce the arcana_analytics dataset:
+    - models/role_risk_scores.sql
+    - models/permission_audit_summary.sql
+    - models/active_orgs.sql
+    - models/feature_adoption.sql
+
+  Known quirks:
+    - risk_score is NULL for users created before 2024-03-01 (pre-RiskML rollout)
+    - audit_log.payload schema varies by event_type; see platform docs for field reference
+    - feature_flags rows are only created when a flag is first evaluated; absence ≠ disabled
