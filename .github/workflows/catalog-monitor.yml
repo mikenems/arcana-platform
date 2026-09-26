@@ -2,9 +2,9 @@ name: arcana_platform - Catalog Monitor
 
 on:
   push:
-    branches: ["main"]
+    branches: ['main']
   pull_request:
-    branches: ["main"]
+    branches: ['main']
 
 jobs:
   catalog-monitor:
@@ -12,56 +12,125 @@ jobs:
     permissions:
       contents: read
       statuses: write
+    env:
+      CATALOG_WEBHOOK_URL: ${{ secrets.CATALOG_WEBHOOK_URL }}
+      CATALOG_WEBHOOK_SECRET: ${{ secrets.CATALOG_WEBHOOK_SECRET }}
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Detect changes and notify catalog
+      - name: Send changes to Helperee
         if: env.CATALOG_WEBHOOK_URL != ''
         env:
-          CATALOG_WEBHOOK_URL: ${{ secrets.CATALOG_WEBHOOK_URL }}
-          CATALOG_WEBHOOK_SECRET: ${{ secrets.CATALOG_WEBHOOK_SECRET }}
+          EVENT_NAME: ${{ github.event_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          BRANCH: ${{ github.head_ref || github.ref_name }}
+          COMMIT_MESSAGE: ${{ github.event.head_commit.message || github.event.pull_request.title }}
+          COMMIT_URL: ${{ github.event.head_commit.url || github.event.pull_request.html_url }}
+          AUTHOR_NAME: ${{ github.event.head_commit.author.name || github.actor }}
+          AUTHOR_EMAIL: ${{ github.event.head_commit.author.email }}
         run: |
-          # Get list of changed files for this push/PR
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            CHANGED_FILES=$(git diff --name-only ${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }})
+          set -eo pipefail
+          # Scratch files live outside the checkout so they never touch the repo
+          WORK=$(mktemp -d)
+
+          # Commit range: the PR's base..head, or everything in this push
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            BASE_SHA="$PR_BASE_SHA"
+            HEAD_SHA="$PR_HEAD_SHA"
           else
-            CHANGED_FILES=$(git diff --name-only HEAD~1 HEAD)
+            HEAD_SHA="$GITHUB_SHA"
+            BASE_SHA="$PUSH_BEFORE"
+            # A new branch's first push has no usable "before" commit
+            if [ -z "$BASE_SHA" ] || ! git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null; then
+              BASE_SHA=$(git rev-parse "$HEAD_SHA~1" 2>/dev/null || true)
+            fi
           fi
 
+          # Unified diff, skipping lockfiles and build artifacts
+          EXCLUDES=(':(exclude)package-lock.json' ':(exclude)yarn.lock' ':(exclude)pnpm-lock.yaml' ':(exclude)*.min.js' ':(exclude)*.map')
+          diff_file() {
+            if [ -n "$BASE_SHA" ]; then
+              git diff --no-color --unified=5 "$BASE_SHA" "$HEAD_SHA" -- "$1" "${EXCLUDES[@]}"
+            else
+              git show --no-color --unified=5 --format= "$HEAD_SHA" -- "$1" "${EXCLUDES[@]}"
+            fi
+          }
+          if [ -n "$BASE_SHA" ]; then
+            git diff --name-only "$BASE_SHA" "$HEAD_SHA" > "$WORK/changed_files.txt"
+          else
+            git show --name-only --format= "$HEAD_SHA" > "$WORK/changed_files.txt"
+          fi
           echo "Changed files:"
-          echo "$CHANGED_FILES"
+          cat "$WORK/changed_files.txt"
 
-          # Encode changed files as a JSON array
-          FILES_JSON=$(echo "$CHANGED_FILES" | jq -R -s 'split("\n") | map(select(length > 0))')
+          # Diff file by file with a per-file cap, so one huge file can't crowd out the rest
+          DIFF_TRUNCATED=false
+          : > "$WORK/full.diff"
+          while IFS= read -r f; do
+            [ -n "$f" ] || continue
+            diff_file "$f" > "$WORK/file.diff" || true
+            if [ "$(wc -c < "$WORK/file.diff")" -gt 20000 ]; then
+              DIFF_TRUNCATED=true
+              head -c 20000 "$WORK/file.diff" >> "$WORK/full.diff"
+              echo >> "$WORK/full.diff" # the cut lands mid-line; keep the next file's header on its own line
+            else
+              cat "$WORK/file.diff" >> "$WORK/full.diff"
+            fi
+          done < "$WORK/changed_files.txt"
 
-          # Include helperee.yaml content if the file exists in the repo
-          HELPEREE_YAML=""
-          if [ -f "helperee.yaml" ]; then
-            HELPEREE_YAML=$(cat helperee.yaml)
+          if [ "$(wc -c < "$WORK/full.diff")" -gt 100000 ]; then
+            DIFF_TRUNCATED=true
           fi
+          head -c 100000 "$WORK/full.diff" > "$WORK/payload.diff"
 
-          # Build payload — pattern matching and classification happens in the catalog
-          PAYLOAD=$(jq -nc \
+          # Include helperee.yaml (or .yml) if the repo has one
+          : > "$WORK/helperee_yaml.txt"
+          for f in helperee.yaml helperee.yml; do
+            if [ -f "$f" ]; then
+              cp "$f" "$WORK/helperee_yaml.txt"
+              break
+            fi
+          done
+
+          # Build the payload from files: a large diff would overflow a shell argument
+          jq -nc \
             --arg repo "$GITHUB_REPOSITORY" \
             --arg ref "$GITHUB_REF" \
-            --arg sha "$GITHUB_SHA" \
-            --arg message "${{ github.event.head_commit.message || github.event.pull_request.title }}" \
-            --arg url "${{ github.event.head_commit.url || github.event.pull_request.html_url }}" \
-            --arg author "${{ github.event.head_commit.author.name || github.actor }}" \
-            --arg email "${{ github.event.head_commit.author.email || '' }}" \
-            --argjson files "$FILES_JSON" \
-            --arg helpereeYaml "$HELPEREE_YAML" \
-            '{repo: $repo, ref: $ref, commitSha: $sha, commitMessage: $message, commitUrl: $url, authorName: $author, authorEmail: $email, changedFiles: $files, helpereeYamlContent: (if $helpereeYaml != "" then $helpereeYaml else null end)}')
+            --arg branch "$BRANCH" \
+            --arg eventType "$EVENT_NAME" \
+            --arg prNumber "$PR_NUMBER" \
+            --arg baseSha "$BASE_SHA" \
+            --arg headSha "$HEAD_SHA" \
+            --arg message "$COMMIT_MESSAGE" \
+            --arg url "$COMMIT_URL" \
+            --arg author "$AUTHOR_NAME" \
+            --arg email "$AUTHOR_EMAIL" \
+            --arg diffTruncated "$DIFF_TRUNCATED" \
+            --rawfile files "$WORK/changed_files.txt" \
+            --rawfile diff "$WORK/payload.diff" \
+            --rawfile helpereeYaml "$WORK/helperee_yaml.txt" \
+            '{
+              repo: $repo, ref: $ref, branch: $branch, eventType: $eventType,
+              prNumber: (if $prNumber == "" then null else ($prNumber | tonumber) end),
+              baseSha: (if $baseSha == "" then null else $baseSha end), headSha: $headSha,
+              commitSha: $headSha, commitMessage: $message, commitUrl: $url,
+              authorName: $author, authorEmail: $email,
+              changedFiles: ($files | split("\n") | map(select(length > 0))),
+              diff: $diff, diffTruncated: ($diffTruncated == "true"),
+              helpereeYamlContent: (if $helpereeYaml == "" then null else $helpereeYaml end)
+            }' > "$WORK/payload.json"
 
-          SIGNATURE=$(printf '%s' "$PAYLOAD" | openssl dgst -sha256 -hmac "$CATALOG_WEBHOOK_SECRET" | sed 's/.* //')
-
+          # Sign and send the exact bytes of payload.json
+          SIGNATURE=$(openssl dgst -sha256 -hmac "$CATALOG_WEBHOOK_SECRET" < "$WORK/payload.json" | sed 's/.* //')
           curl -f -s -X POST \
             -H "Content-Type: application/json" \
             -H "X-Catalog-Signature: sha256=$SIGNATURE" \
-            --data "$PAYLOAD" \
-            "$CATALOG_WEBHOOK_URL" || echo "Warning: Catalog notification failed (non-blocking)"
+            --data-binary @"$WORK/payload.json" \
+            "$CATALOG_WEBHOOK_URL" || echo "Warning: Helperee notification failed (non-blocking)"
