@@ -7,7 +7,7 @@ CREATE TABLE user_permissions (
   granted_at     TIMESTAMPTZ NOT NULL,
   granted_by     TEXT NOT NULL,
   expires_at     TIMESTAMPTZ,
-  is_active      BOOLEAN NOT NULL DEFAULT TRUE
+  is_active      BOOLEAN NOT NULL DEFAULT TRUE,
   risk_score     NUMERIC,                -- ML-generated access risk score
   mfa_enforced   BOOLEAN DEFAULT FALSE   -- whether MFA is required for this role
 );

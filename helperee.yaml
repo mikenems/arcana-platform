@@ -1,30 +1,140 @@
-# helperee.yaml — data asset metadata for arcana_platform
-# Commit this file to your repo root. Helperee reads it automatically on every push.
+# helperee.yaml — data contracts for arcana_platform
+# Commit this file to your repo root. Helperee reads it on every push to a
+# monitored branch and checks pull requests against these contracts.
+#
+# Keep it short: every field here drives an automated check or alert.
 
 asset: arcana_platform
-display_name: "Arcana Platform"
-owner: "Alex Chen"
-owner_email: "platform@arcana.io"
-intended_consumers: "Analytics, Security, Product"
-tier: raw
-domain: platform-infrastructure
-notes: |
-  Source tables for the Arcana platform, synced nightly from the production
-  Postgres replica into BigQuery (arcana_platform dataset) by 03:00 UTC.
+owner: Alex Chen
+owner_email: platform@arcana.io
 
-  Tables covered by this repo:
-    - user_permissions  — user role grants, MFA state, and ML risk scores
-    - audit_log         — immutable compliance event trail
-    - subscriptions     — org plan and billing state
-    - feature_flags     — per-org feature flag state
+contracts:
+  # ── Source tables (Postgres replica → BigQuery arcana_platform, nightly by 03:00 UTC)
 
-  SQL transform models live in models/ and produce the arcana_analytics dataset:
-    - models/role_risk_scores.sql
-    - models/permission_audit_summary.sql
-    - models/active_orgs.sql
-    - models/feature_adoption.sql
+  - asset: audit_log
+    version: 1.0.0
+    source_paths: [schema/audit_log.sql]
+    fields:
+      - name: event_id
+        type: STRING
+        required: true
+        key: true
+        meaning: Unique identifier (UUID) for a single audit event.
+      - name: event_type
+        type: STRING
+        required: true
+        meaning: >-
+          Dot-namespaced event category from the platform's EventType enum, e.g.
+          login.success, login.failed, permission.escalated, mfa.bypassed,
+          api_key.leaked, session.hijack_attempt. Downstream models classify
+          events as high-risk by exact match on these values.
+      - name: actor_id
+        type: STRING
+        required: true
+        meaning: User ID of the person or system that triggered the event.
+      - name: org_id
+        type: STRING
+        required: true
+        meaning: Organization in which the event occurred.
+      - name: resource_type
+        type: STRING
+        meaning: Type of resource affected, e.g. user, feature_flag, api_key. NULL for events with no target resource.
+      - name: resource_id
+        type: STRING
+        meaning: ID of the affected resource. NULL when resource_type is NULL.
+      - name: payload
+        type: JSON
+        meaning: Event-specific detail. Its shape varies by event_type and is not part of this contract.
+      - name: occurred_at
+        type: TIMESTAMP
+        required: true
+        meaning: Exact UTC time the event occurred (not when it was synced).
+    consumers:
+      - name: Data team
+        asset: permission_audit_summary
+        notify: email:data@arcana.io
 
-  Known quirks:
-    - risk_score is NULL for users created before 2024-03-01 (pre-RiskML rollout)
-    - audit_log.payload schema varies by event_type; see platform docs for field reference
-    - feature_flags rows are only created when a flag is first evaluated; absence ≠ disabled
+  - asset: user_permissions
+    version: 1.0.0
+    source_paths: [schema/user_permissions.sql]
+    fields:
+      - name: user_id
+        type: STRING
+        required: true
+        key: true
+        meaning: Platform user identifier, referenced across permission and audit records.
+      - name: org_id
+        type: STRING
+        required: true
+        meaning: Organization the permission belongs to. A user can hold different roles in different orgs.
+      - name: role
+        type: STRING
+        required: true
+        meaning: "Access level in the org: 'admin' (full write), 'member' (can create resources) or 'viewer' (read-only)."
+      - name: granted_at
+        type: TIMESTAMP
+        required: true
+        meaning: When this permission was granted.
+      - name: granted_by
+        type: STRING
+        required: true
+        meaning: User ID of whoever granted the permission.
+      - name: expires_at
+        type: TIMESTAMP
+        meaning: When the permission expires. NULL means it never expires.
+      - name: is_active
+        type: BOOLEAN
+        required: true
+        meaning: Whether the permission is currently in effect.
+      - name: risk_score
+        type: NUMERIC
+        meaning: >-
+          ML-generated access risk score from 0.0 to 1.0, refreshed nightly by
+          RiskML. Above 0.7 is elevated risk. NULL for users created before
+          2024-03-01 (pre-RiskML rollout).
+      - name: mfa_enforced
+        type: BOOLEAN
+        meaning: Whether MFA is required for this user-role combination.
+    consumers:
+      - name: Data team
+        asset: role_risk_scores
+        notify: email:data@arcana.io
+
+  # ── Analytics models (arcana_analytics, built from models/)
+
+  - asset: permission_audit_summary
+    version: 1.0.0
+    owner: Priya Nair
+    owner_email: data@arcana.io
+    source_paths: [models/permission_audit_summary.sql]
+    fields:
+      - name: org_id
+        type: STRING
+        required: true
+        meaning: Organization identifier.
+      - name: user_id
+        type: STRING
+        required: true
+        meaning: User who performed the events.
+      - name: role
+        type: STRING
+        required: true
+        meaning: The user's current role in the org, joined from user_permissions.
+      - name: total_events
+        type: INTEGER
+        required: true
+        meaning: Count of all audit events for this user in the trailing 90 days.
+      - name: high_risk_events
+        type: INTEGER
+        required: true
+        meaning: >-
+          Count of this user's audit events in the trailing 90 days whose
+          event_type is in the high-risk set: login.failed, permission.escalated,
+          mfa.bypassed, api_key.leaked, session.hijack_attempt.
+      - name: last_event_at
+        type: TIMESTAMP
+        meaning: Time of this user's most recent audit event.
+    consumers:
+      - name: Security team
+        asset: Security Overview Dashboard
+        notify: slack:#security
