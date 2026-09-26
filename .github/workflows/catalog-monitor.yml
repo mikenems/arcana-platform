@@ -11,7 +11,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      statuses: write
+      pull-requests: write # to post Helperee's verdict as a PR comment
     env:
       CATALOG_WEBHOOK_URL: ${{ secrets.CATALOG_WEBHOOK_URL }}
       CATALOG_WEBHOOK_SECRET: ${{ secrets.CATALOG_WEBHOOK_SECRET }}
@@ -35,6 +35,7 @@ jobs:
           COMMIT_URL: ${{ github.event.head_commit.url || github.event.pull_request.html_url }}
           AUTHOR_NAME: ${{ github.event.head_commit.author.name || github.actor }}
           AUTHOR_EMAIL: ${{ github.event.head_commit.author.email }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -eo pipefail
           # Scratch files live outside the checkout so they never touch the repo
@@ -129,8 +130,45 @@ jobs:
 
           # Sign and send the exact bytes of payload.json
           SIGNATURE=$(openssl dgst -sha256 -hmac "$CATALOG_WEBHOOK_SECRET" < "$WORK/payload.json" | sed 's/.* //')
-          curl -f -s -X POST \
-            -H "Content-Type: application/json" \
-            -H "X-Catalog-Signature: sha256=$SIGNATURE" \
-            --data-binary @"$WORK/payload.json" \
-            "$CATALOG_WEBHOOK_URL" || echo "Warning: Helperee notification failed (non-blocking)"
+          if ! curl -f -sS -X POST \
+              -H "Content-Type: application/json" \
+              -H "X-Catalog-Signature: sha256=$SIGNATURE" \
+              --data-binary @"$WORK/payload.json" \
+              -o "$WORK/response.json" \
+              "$CATALOG_WEBHOOK_URL"; then
+            # Never block a merge because Helperee is down
+            echo "::warning::Helperee could not be reached, so this change wasn't checked against data contracts."
+            exit 0
+          fi
+
+          VERDICT=$(jq -r '.verdict // empty' "$WORK/response.json")
+          jq -r '.commentMarkdown // empty' "$WORK/response.json" > "$WORK/comment.md"
+          echo "Helperee verdict: ${VERDICT:-none}"
+          if [ -s "$WORK/comment.md" ]; then
+            cat "$WORK/comment.md" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          # On PRs, keep a single Helperee comment up to date rather than adding one per push.
+          # It's found by this marker, which must match the literal in the jq filter below.
+          if [ "$EVENT_NAME" = "pull_request" ] && [ -s "$WORK/comment.md" ]; then
+            MARKER='<!-- helperee-contract-check -->'
+            EXISTING=$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" --paginate \
+              --jq '.[] | select(.user.type == "Bot" and (.body | startswith("<!-- helperee-contract-check -->"))) | .id' \
+              | tail -n 1) || EXISTING=""
+            { echo "$MARKER"; cat "$WORK/comment.md"; } > "$WORK/body.md"
+            jq -n --rawfile body "$WORK/body.md" '{body: $body}' > "$WORK/request.json"
+            if [ -n "$EXISTING" ]; then
+              # Update even when the PR is now safe, so a stale red comment turns green
+              gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$EXISTING" --input "$WORK/request.json" > /dev/null \
+                || echo "::warning::Could not update the Helperee PR comment."
+            elif [ "$VERDICT" != "safe" ]; then
+              gh api -X POST "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" --input "$WORK/request.json" > /dev/null \
+                || echo "::warning::Could not post the Helperee PR comment. Does the workflow have pull-requests: write?"
+            fi
+          fi
+
+          # Only deterministic breaking changes fail the check; meaning changes are questions for the author
+          if [ "$EVENT_NAME" = "pull_request" ] && [ "$(jq -r '.fail // false' "$WORK/response.json")" = "true" ]; then
+            echo "::error::Helperee: this PR breaks a data contract. See the PR comment for the impact."
+            exit 1
+          fi
