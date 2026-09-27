@@ -1,4 +1,4 @@
-name: arcana_platform - Catalog Monitor
+name: Riftless
 
 on:
   push:
@@ -7,11 +7,11 @@ on:
     branches: ['main']
 
 jobs:
-  catalog-monitor:
+  contract-check:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      pull-requests: write # to post Helperee's verdict as a PR comment
+      pull-requests: write # to post Riftless's verdict as a PR comment
     env:
       CATALOG_WEBHOOK_URL: ${{ secrets.CATALOG_WEBHOOK_URL }}
       CATALOG_WEBHOOK_SECRET: ${{ secrets.CATALOG_WEBHOOK_SECRET }}
@@ -22,7 +22,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Send changes to Helperee
+      - name: Send changes to Riftless
         if: env.CATALOG_WEBHOOK_URL != ''
         env:
           EVENT_NAME: ${{ github.event_name }}
@@ -91,11 +91,11 @@ jobs:
           fi
           head -c 100000 "$WORK/full.diff" > "$WORK/payload.diff"
 
-          # Include helperee.yaml (or .yml) if the repo has one
-          : > "$WORK/helperee_yaml.txt"
-          for f in helperee.yaml helperee.yml; do
+          # Include the config file if the repo has one (helperee.* is the pre-rename name)
+          : > "$WORK/config_yaml.txt"
+          for f in riftless.yaml riftless.yml helperee.yaml helperee.yml; do
             if [ -f "$f" ]; then
-              cp "$f" "$WORK/helperee_yaml.txt"
+              cp "$f" "$WORK/config_yaml.txt"
               break
             fi
           done
@@ -116,7 +116,7 @@ jobs:
             --arg diffTruncated "$DIFF_TRUNCATED" \
             --rawfile files "$WORK/changed_files.txt" \
             --rawfile diff "$WORK/payload.diff" \
-            --rawfile helpereeYaml "$WORK/helperee_yaml.txt" \
+            --rawfile configYaml "$WORK/config_yaml.txt" \
             '{
               repo: $repo, ref: $ref, branch: $branch, eventType: $eventType,
               prNumber: (if $prNumber == "" then null else ($prNumber | tonumber) end),
@@ -125,7 +125,7 @@ jobs:
               authorName: $author, authorEmail: $email,
               changedFiles: ($files | split("\n") | map(select(length > 0))),
               diff: $diff, diffTruncated: ($diffTruncated == "true"),
-              helpereeYamlContent: (if $helpereeYaml == "" then null else $helpereeYaml end)
+              configYamlContent: (if $configYaml == "" then null else $configYaml end)
             }' > "$WORK/payload.json"
 
           # Sign and send the exact bytes of payload.json
@@ -136,39 +136,39 @@ jobs:
               --data-binary @"$WORK/payload.json" \
               -o "$WORK/response.json" \
               "$CATALOG_WEBHOOK_URL"; then
-            # Never block a merge because Helperee is down
-            echo "::warning::Helperee could not be reached, so this change wasn't checked against data contracts."
+            # Never block a merge because Riftless is down
+            echo "::warning::Riftless could not be reached, so this change wasn't checked against data contracts."
             exit 0
           fi
 
           VERDICT=$(jq -r '.verdict // empty' "$WORK/response.json")
           jq -r '.commentMarkdown // empty' "$WORK/response.json" > "$WORK/comment.md"
-          echo "Helperee verdict: ${VERDICT:-none}"
+          echo "Riftless verdict: ${VERDICT:-none}"
           if [ -s "$WORK/comment.md" ]; then
             cat "$WORK/comment.md" >> "$GITHUB_STEP_SUMMARY"
           fi
 
-          # On PRs, keep a single Helperee comment up to date rather than adding one per push.
+          # On PRs, keep a single Riftless comment up to date rather than adding one per push.
           # It's found by this marker, which must match the literal in the jq filter below.
           if [ "$EVENT_NAME" = "pull_request" ] && [ -s "$WORK/comment.md" ]; then
-            MARKER='<!-- helperee-contract-check -->'
+            MARKER='<!-- riftless-contract-check -->'
             EXISTING=$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" --paginate \
-              --jq '.[] | select(.user.type == "Bot" and (.body | startswith("<!-- helperee-contract-check -->"))) | .id' \
+              --jq '.[] | select(.user.type == "Bot" and (.body | startswith("<!-- riftless-contract-check -->"))) | .id' \
               | tail -n 1) || EXISTING=""
             { echo "$MARKER"; cat "$WORK/comment.md"; } > "$WORK/body.md"
             jq -n --rawfile body "$WORK/body.md" '{body: $body}' > "$WORK/request.json"
             if [ -n "$EXISTING" ]; then
               # Update even when the PR is now safe, so a stale red comment turns green
               gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$EXISTING" --input "$WORK/request.json" > /dev/null \
-                || echo "::warning::Could not update the Helperee PR comment."
+                || echo "::warning::Could not update the Riftless PR comment."
             elif [ "$VERDICT" != "safe" ]; then
               gh api -X POST "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" --input "$WORK/request.json" > /dev/null \
-                || echo "::warning::Could not post the Helperee PR comment. Does the workflow have pull-requests: write?"
+                || echo "::warning::Could not post the Riftless PR comment. Does the workflow have pull-requests: write?"
             fi
           fi
 
           # Only deterministic breaking changes fail the check; meaning changes are questions for the author
           if [ "$EVENT_NAME" = "pull_request" ] && [ "$(jq -r '.fail // false' "$WORK/response.json")" = "true" ]; then
-            echo "::error::Helperee: this PR breaks a data contract. See the PR comment for the impact."
+            echo "::error::Riftless: this PR breaks a data contract. See the PR comment for the impact."
             exit 1
           fi

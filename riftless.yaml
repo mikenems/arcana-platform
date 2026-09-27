@@ -1,5 +1,5 @@
-# helperee.yaml — data contracts for arcana_platform
-# Commit this file to your repo root. Helperee reads it on every push to a
+# riftless.yaml — data contracts for arcana_platform
+# Commit this file to your repo root. Riftless reads it on every push to a
 # monitored branch and checks pull requests against these contracts.
 #
 # Keep it short: every field here drives an automated check or alert.
