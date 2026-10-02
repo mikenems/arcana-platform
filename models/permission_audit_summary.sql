@@ -13,7 +13,6 @@ WITH high_risk_types AS (
   FROM UNNEST([
     'login.failed',
     'permission.escalated',
-    'mfa.bypassed',
     'api_key.leaked',
     'session.hijack_attempt'
   ]) AS event_type
