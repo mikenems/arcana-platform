@@ -2,7 +2,7 @@
 -- Compliance trail for all platform events
 CREATE TABLE audit_log (
   event_id       TEXT NOT NULL,
-  event_type     TEXT NOT NULL,
+  event_category TEXT NOT NULL,
   actor_id       TEXT NOT NULL,
   org_id         TEXT NOT NULL,
   resource_type  TEXT,
