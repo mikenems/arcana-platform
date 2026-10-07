@@ -5,7 +5,7 @@
 -- Refresh: daily at 04:00 UTC
 -- Owner:   Priya Nair <data@arcana.io>
 
--- High-risk event types sourced from audit_log.event_type.
+-- High-risk event types (see audit_log.event_type).
 -- The high_risk_events_7d metric in the Security Overview Dashboard aggregates
 -- this column filtered to the trailing 7 days.
 WITH high_risk_types AS (
