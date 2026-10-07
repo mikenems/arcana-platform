@@ -32,7 +32,7 @@ FROM arcana_platform.audit_log AS al
 LEFT JOIN arcana_platform.user_permissions AS up
   ON al.actor_id = up.user_id AND al.org_id = up.org_id
 
-WHERE al.occurred_at >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 90 DAY)
+WHERE al.occurred_at >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 30 DAY)
 
 GROUP BY
   al.org_id,
