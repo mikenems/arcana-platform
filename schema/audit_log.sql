@@ -8,5 +8,6 @@ CREATE TABLE audit_log (
   resource_type  TEXT,
   resource_id    TEXT,
   payload        JSONB,
-  occurred_at    TIMESTAMPTZ NOT NULL
+  occurred_at    TIMESTAMPTZ NOT NULL,
+  ip_address     TEXT
 );
