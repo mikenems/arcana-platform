@@ -138,3 +138,45 @@ contracts:
       - name: Security team
         asset: Security Overview Dashboard
         notify: slack:#security
+
+  - asset: role_risk_scores
+    version: 1.0.0
+    owner: Priya Nair
+    owner_email: data@arcana.io
+    source_paths: [models/role_risk_scores.sql]
+    fields:
+      - name: org_id
+        type: STRING
+        required: true
+        meaning: Organization the user belongs to.
+      - name: user_id
+        type: STRING
+        required: true
+        meaning: Platform user this row describes. One row per user per org.
+      - name: role
+        type: STRING
+        required: true
+        meaning: The user's current role in the org, passed through from user_permissions.
+      - name: risk_score
+        type: NUMERIC
+        meaning: >-
+          ML-generated access risk score from 0.0 to 1.0, passed through
+          unchanged from user_permissions. Above 0.7 is elevated risk and is
+          flagged in the Security Overview Dashboard.
+      - name: mfa_enforced
+        type: BOOLEAN
+        meaning: Whether MFA is required for this user-role combination.
+      - name: flagged_at
+        type: TIMESTAMP
+        meaning: >-
+          When risk_score first crossed 0.7. NULL until it does, and never reset
+          even if the score later drops.
+      - name: flag_reason
+        type: STRING
+        meaning: >-
+          Human-readable reason for the flag: 'Critical' above 0.9, 'Elevated'
+          above 0.7, NULL otherwise.
+    consumers:
+      - name: Security team
+        asset: Security Overview Dashboard
+        notify: slack:#security
